@@ -1,30 +1,39 @@
 import tkinter as tk
 from tkinter import messagebox, ttk
-import sqlite3
+import json
+import os
 
-# Configuração do banco de dados SQLite
-conn = sqlite3.connect('cadastro_notas.db')
-c = conn.cursor()
-c.execute('''
-    CREATE TABLE IF NOT EXISTS alunos (
-        matricula TEXT PRIMARY KEY,
-        nome TEXT NOT NULL,
-        nota1 REAL NOT NULL,
-        nota2 REAL NOT NULL,
-        nota3 REAL NOT NULL,
-        nota4 REAL NOT NULL
-    )
-''')
-conn.commit()
+# Configuração do "Banco de Dados" JSON
+ARQUIVO_DB = 'cadastro_notas.json'
+
+def carregar_dados():
+    if not os.path.exists(ARQUIVO_DB):
+        return [] # Retorna lista para manter compatibilidade com seu arquivo
+    try:
+        with open(ARQUIVO_DB, 'r', encoding='utf-8') as f:
+            conteudo = json.load(f)
+            return conteudo if isinstance(conteudo, list) else []
+    except (json.JSONDecodeError, IOError):
+        return []
+
+def salvar_dados(dados):
+    try:
+        with open(ARQUIVO_DB, 'w', encoding='utf-8') as f:
+            json.dump(dados, f, indent=4, ensure_ascii=False)
+    except IOError:
+        messagebox.showerror("Erro", "Não foi possível salvar os dados no arquivo JSON.")
 
 def adicionar_aluno():
-    matricula = entry_matricula.get()
-    nome = entry_nome.get()
+    matricula = entry_matricula.get().strip()
+    nome = entry_nome.get().strip()
+    
     try:
-        nota1 = float(entry_nota1.get())
-        nota2 = float(entry_nota2.get())
-        nota3 = float(entry_nota3.get())
-        nota4 = float(entry_nota4.get())
+        n1 = float(entry_nota1.get())
+        n2 = float(entry_nota2.get())
+        n3 = float(entry_nota3.get())
+        n4 = float(entry_nota4.get())
+        media = (n1 + n2 + n3 + n4) / 4
+        situacao = "APROVADO" if media >= 6 else "REPROVADO"
     except ValueError:
         messagebox.showerror("Erro", "Por favor, insira notas válidas.")
         return
@@ -33,32 +42,130 @@ def adicionar_aluno():
         messagebox.showerror("Erro", "Todos os campos são obrigatórios.")
         return
 
-    try:
-        c.execute('INSERT INTO alunos (matricula, nome, nota1, nota2, nota3, nota4) VALUES (?, ?, ?, ?, ?, ?)',
-                  (matricula, nome, nota1, nota2, nota3, nota4))
-        conn.commit()
-        messagebox.showinfo("Sucesso", "Aluno adicionado com sucesso!")
-        exibir_resultados()
-        limpar_campos()
-    except sqlite3.IntegrityError:
+    dados = carregar_dados()
+    
+    # Verifica se a matrícula já existe na lista
+    if any(aluno.get("Matricula") == matricula for aluno in dados):
         messagebox.showerror("Erro", "Matrícula já cadastrada.")
+        return
+
+    novo_aluno = {
+        "Matricula": matricula,
+        "Nome": nome,
+        "Nota1": round(n1, 1),
+        "Nota2": round(n2, 1),
+        "Nota3": round(n3, 1),
+        "Nota4": round(n4, 1),
+        "Media": round(media, 1),
+        "Situacao": situacao
+    }
+    
+    dados.append(novo_aluno)
+    salvar_dados(dados)
+    messagebox.showinfo("Sucesso", "Aluno adicionado com sucesso!")
+    exibir_resultados()
+    limpar_campos()
 
 def exibir_resultados(filtro_nome=None):
     for row in tree.get_children():
         tree.delete(row)
 
-    query = 'SELECT * FROM alunos'
-    params = ()
+    dados = carregar_dados()
 
-    if filtro_nome:
-        query += ' WHERE nome LIKE ?'
-        params = (f'%{filtro_nome}%',)
+    for aluno in dados:
+        nome_aluno = aluno.get('Nome', '')
+        
+        if filtro_nome and filtro_nome.lower() not in nome_aluno.lower():
+            continue
+            
+        # Formatando os valores para 1 casa decimal na exibição
+        n1 = f"{float(aluno.get('Nota1', 0)):.1f}"
+        n2 = f"{float(aluno.get('Nota2', 0)):.1f}"
+        n3 = f"{float(aluno.get('Nota3', 0)):.1f}"
+        n4 = f"{float(aluno.get('Nota4', 0)):.1f}"
+        media = f"{float(aluno.get('Media', 0)):.1f}"
+        
+        tree.insert('', 'end', values=(
+            aluno.get('Matricula'), 
+            nome_aluno, 
+            n1, n2, n3, n4, media,
+            aluno.get('Situacao')
+        ))
 
-    c.execute(query, params)
-    for aluno in c.fetchall():
-        media = (aluno[2] + aluno[3] + aluno[4] + aluno[5]) / 4
+def excluir_aluno():
+    selected_item = tree.selection()
+    if not selected_item:
+        messagebox.showerror("Erro", "Selecione um aluno para excluir.")
+        return
+        
+    matricula = str(tree.item(selected_item)['values'][0])
+    dados = carregar_dados()
+    
+    # Filtra a lista removendo o aluno selecionado
+    novos_dados = [a for a in dados if str(a.get("Matricula")) != matricula]
+    
+    if len(novos_dados) < len(dados):
+        salvar_dados(novos_dados)
+        messagebox.showinfo("Sucesso", "Aluno excluído com sucesso!")
+        exibir_resultados()
+
+def iniciar_edicao():
+    selected_item = tree.selection()
+    if not selected_item:
+        messagebox.showerror("Erro", "Selecione um aluno para editar.")
+        return
+    
+    global aluno_original_matricula
+    valores = tree.item(selected_item)['values']
+    aluno_original_matricula = str(valores[0])
+    
+    limpar_campos()
+    entry_matricula.insert(0, valores[0])
+    entry_nome.insert(0, valores[1])
+    entry_nota1.insert(0, valores[2])
+    entry_nota2.insert(0, valores[3])
+    entry_nota3.insert(0, valores[4])
+    entry_nota4.insert(0, valores[5])
+
+def salvar_edicao():
+    if aluno_original_matricula is None:
+        return
+        
+    nova_matricula = entry_matricula.get().strip()
+    nome = entry_nome.get().strip()
+    
+    try:
+        n1 = float(entry_nota1.get())
+        n2 = float(entry_nota2.get())
+        n3 = float(entry_nota3.get())
+        n4 = float(entry_nota4.get())
+        media = (n1 + n2 + n3 + n4) / 4
         situacao = "APROVADO" if media >= 6 else "REPROVADO"
-        tree.insert('', 'end', values=(aluno[0], aluno[1], aluno[2], aluno[3], aluno[4], aluno[5], f"{media:.1f}", situacao))
+    except ValueError:
+        messagebox.showerror("Erro", "Por favor, insira notas válidas.")
+        return
+
+    dados = carregar_dados()
+    
+    for aluno in dados:
+        if str(aluno.get("Matricula")) == aluno_original_matricula:
+            aluno["Matricula"] = nova_matricula
+            aluno["Nome"] = nome
+            aluno["Nota1"] = round(n1, 1)
+            aluno["Nota2"] = round(n2, 1)
+            aluno["Nota3"] = round(n3, 1)
+            aluno["Nota4"] = round(n4, 1)
+            aluno["Media"] = round(media, 1)
+            aluno["Situacao"] = situacao
+            break
+    
+    salvar_dados(dados)
+    messagebox.showinfo("Sucesso", "Aluno atualizado com sucesso!")
+    exibir_resultados()
+    limpar_campos()
+
+def buscar_aluno():
+    exibir_resultados(entry_busca.get().strip())
 
 def limpar_campos():
     entry_matricula.delete(0, tk.END)
@@ -68,129 +175,46 @@ def limpar_campos():
     entry_nota3.delete(0, tk.END)
     entry_nota4.delete(0, tk.END)
 
-def excluir_aluno():
-    selected_item = tree.selection()
-    if not selected_item:
-        messagebox.showerror("Erro", "Selecione um aluno para excluir.")
-        return
-    matricula = tree.item(selected_item)['values'][0]
-    c.execute('DELETE FROM alunos WHERE matricula = ?', (matricula,))
-    conn.commit()
-    messagebox.showinfo("Sucesso", "Aluno excluído com sucesso!")
-    exibir_resultados()
-
-def iniciar_edicao():
-    selected_item = tree.selection()
-    if not selected_item:
-        messagebox.showerror("Erro", "Selecione um aluno para editar.")
-        return
-    global aluno_editando
-    aluno_editando = tree.item(selected_item)['values']
-    entry_matricula.delete(0, tk.END)
-    entry_nome.delete(0, tk.END)
-    entry_nota1.delete(0, tk.END)
-    entry_nota2.delete(0, tk.END)
-    entry_nota3.delete(0, tk.END)
-    entry_nota4.delete(0, tk.END)
-    entry_matricula.insert(0, aluno_editando[0])
-    entry_nome.insert(0, aluno_editando[1])
-    entry_nota1.insert(0, aluno_editando[2])
-    entry_nota2.insert(0, aluno_editando[3])
-    entry_nota3.insert(0, aluno_editando[4])
-    entry_nota4.insert(0, aluno_editando[5])
-
-def salvar_edicao():
-    if aluno_editando is None:
-        return
-    matricula = entry_matricula.get()
-    nome = entry_nome.get()
-    try:
-        nota1 = float(entry_nota1.get())
-        nota2 = float(entry_nota2.get())
-        nota3 = float(entry_nota3.get())
-        nota4 = float(entry_nota4.get())
-    except ValueError:
-        messagebox.showerror("Erro", "Por favor, insira notas válidas.")
-        return
-
-    c.execute('UPDATE alunos SET matricula = ?, nome = ?, nota1 = ?, nota2 = ?, nota3 = ?, nota4 = ? WHERE matricula = ?',
-              (matricula, nome, nota1, nota2, nota3, nota4, aluno_editando[0]))
-    conn.commit()
-    messagebox.showinfo("Sucesso", "Aluno atualizado com sucesso!")
-    exibir_resultados()
-    limpar_campos()
-
-def buscar_aluno():
-    filtro_nome = entry_busca.get()
-    exibir_resultados(filtro_nome)
-
-# Configuração da interface gráfica
+# --- Interface Gráfica ---
 root = tk.Tk()
-root.title("Cadastro de Notas do Aluno")
-root.geometry("800x600")
+root.title("Cadastro de Notas - JSON NoSQL")
+root.geometry("800x650")
 root.configure(bg="#f4f4f9")
 
 frame = tk.Frame(root, bg="#f4f4f9")
-frame.pack(pady=20)
+frame.pack(pady=10)
 
-tk.Label(frame, text="Matrícula:", bg="#f4f4f9").grid(row=0, column=0)
-entry_matricula = tk.Entry(frame)
-entry_matricula.grid(row=0, column=1)
+labels = ["Matrícula:", "Nome:", "Nota 1:", "Nota 2:", "Nota 3:", "Nota 4:"]
+entries = []
 
-tk.Label(frame, text="Nome:", bg="#f4f4f9").grid(row=1, column=0)
-entry_nome = tk.Entry(frame)
-entry_nome.grid(row=1, column=1)
+for i, texto in enumerate(labels):
+    tk.Label(frame, text=texto, bg="#f4f4f9").grid(row=i, column=0, sticky="e", padx=5)
+    ent = tk.Entry(frame)
+    ent.grid(row=i, column=1, pady=2)
+    entries.append(ent)
 
-tk.Label(frame, text="Nota 1:", bg="#f4f4f9").grid(row=2, column=0)
-entry_nota1 = tk.Entry(frame)
-entry_nota1.grid(row=2, column=1)
+entry_matricula, entry_nome, entry_nota1, entry_nota2, entry_nota3, entry_nota4 = entries
 
-tk.Label(frame, text="Nota 2:", bg="#f4f4f9").grid(row=3, column=0)
-entry_nota2 = tk.Entry(frame)
-entry_nota2.grid(row=3, column=1)
+tk.Button(frame, text="Adicionar Aluno", command=adicionar_aluno, bg="#4CAF50", fg="white", width=20).grid(row=6, columnspan=2, pady=5)
+tk.Button(frame, text="Excluir Aluno", command=excluir_aluno, bg="#f44336", fg="white", width=20).grid(row=7, columnspan=2, pady=5)
+tk.Button(frame, text="Iniciar Edição", command=iniciar_edicao, bg="#00acc1", fg="white", width=20).grid(row=8, columnspan=2, pady=5)
+tk.Button(frame, text="Salvar Edição", command=salvar_edicao, bg="#00796b", fg="white", width=20).grid(row=9, columnspan=2, pady=5)
 
-tk.Label(frame, text="Nota 3:", bg="#f4f4f9").grid(row=4, column=0)
-entry_nota3 = tk.Entry(frame)
-entry_nota3.grid(row=4, column=1)
+busca_frame = tk.Frame(root, bg="#f4f4f9")
+busca_frame.pack(pady=10)
+tk.Label(busca_frame, text="Buscar por Nome:", bg="#f4f4f9").pack(side="left")
+entry_busca = tk.Entry(busca_frame)
+entry_busca.pack(side="left", padx=5)
+tk.Button(busca_frame, text="Buscar", command=buscar_aluno, bg="#4CAF50", fg="white").pack(side="left")
 
-tk.Label(frame, text="Nota 4:", bg="#f4f4f9").grid(row=5, column=0)
-entry_nota4 = tk.Entry(frame)
-entry_nota4.grid(row=5, column=1)
+tree = ttk.Treeview(root, columns=("mat", "nom", "n1", "n2", "n3", "n4", "med", "sit"), show='headings')
+colunas = [("mat", "Matrícula"), ("nom", "Nome"), ("n1", "N1"), ("n2", "N2"), ("n3", "N3"), ("n4", "N4"), ("med", "Média"), ("sit", "Situação")]
+for id_col, texto in colunas:
+    tree.heading(id_col, text=texto)
+    tree.column(id_col, width=90, anchor="center")
 
-tk.Button(frame, text="Adicionar Aluno", command=adicionar_aluno, bg="#4CAF50", fg="white").grid(row=6, columnspan=2, pady=10)
-tk.Button(frame, text="Excluir Aluno", command=excluir_aluno, bg="#f44336", fg="white").grid(row=7, columnspan=2, pady=10)
-tk.Button(frame, text="Iniciar Edição", command=iniciar_edicao, bg="#00acc1", fg="white").grid(row=8, columnspan=2, pady=10)
-tk.Button(frame, text="Salvar Edição", command=salvar_edicao, bg="#00796b", fg="white").grid(row=9, columnspan=2, pady=10)
+tree.pack(expand=True, fill='both', padx=20, pady=10)
 
-# Campo de busca
-tk.Label(root, text="Buscar por Nome:", bg="#f4f4f9").pack(pady=10)
-entry_busca = tk.Entry(root)
-entry_busca.pack(pady=5)
-tk.Button(root, text="Buscar", command=buscar_aluno, bg="#4CAF50", fg="white").pack(pady=5)
-
-# Configuração da tabela
-tree = ttk.Treeview(root, columns=("matricula", "nome", "nota1", "nota2", "nota3", "nota4", "media", "situacao"), show='headings')
-tree.heading("matricula", text="Matrícula")
-tree.heading("nome", text="Nome")
-tree.heading("nota1", text="Nota 1")
-tree.heading("nota2", text="Nota 2")
-tree.heading("nota3", text="Nota 3")
-tree.heading("nota4", text="Nota 4")
-tree.heading("media", text="Média")
-tree.heading("situacao", text="Situação Final")
-
-# Adicionando a barra de rolagem horizontal
-scroll_x = ttk.Scrollbar(root, orient="horizontal", command=tree.xview)
-scroll_x.pack(side='bottom', fill='x')
-tree.configure(xscrollcommand=scroll_x.set)
-
-# Adicionando a tabela ao layout
-tree.pack(expand=True, fill='both', padx=20, pady=20)
-
-# Iniciar o programa
-aluno_editando = None
+aluno_original_matricula = None
 exibir_resultados()
 root.mainloop()
-
-# Fechar a conexão com o banco de dados
-conn.close()
